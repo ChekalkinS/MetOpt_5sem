@@ -6,6 +6,7 @@ from model import LPProblem
 
 
 def _read_float(prompt):
+    # читаем число, если ввели не число, просим ещё раз
     while True:
         try:
             return float(input(prompt))

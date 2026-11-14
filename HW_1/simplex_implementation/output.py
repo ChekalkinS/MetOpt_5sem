@@ -4,7 +4,7 @@ output.py - вывод симплекс-таблиц и итогового от�
 
 
 def _fmt(val):
-    # если число по сути целое - печать без точки
+    # если число по сути целое, печатаем без точки
     if abs(val - round(val)) < 1e-9:
         return str(int(round(val)))
     return f"{val:.4g}"
@@ -71,7 +71,11 @@ def print_solution(result, n_original, goal):
         return
 
     if not result.get("bounded"):
-        print("Задача неограничена, целевая функция растёт бесконечно.")
+        # для max целевая функция растёт до +inf, для min убывает до -inf
+        if goal == "min":
+            print("Задача неограничена, целевая функция убывает до -бесконечности.")
+        else:
+            print("Задача неограничена, целевая функция растёт до +бесконечности.")
         return
 
     x = result["x"]

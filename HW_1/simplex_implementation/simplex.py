@@ -1,5 +1,5 @@
 """
-simplex.py - сам алгоритм симплекс-метода.
+simplex.py - сам алгоритм симплекс-метода, реализован по шагам из методички.
 
 Как решаем задачу:
 1. Смотрим, нашёлся ли базис сразу после канонического вида.
@@ -9,9 +9,9 @@ simplex.py - сам алгоритм симплекс-метода.
 
 Формулы пересчёта таблицы на каждой итерации (разрешающий элемент a[i*][j*]):
   новое a[i*][j*] = 1 / a[i*][j*]
-  новое a[i*][j] = a[i*][j] / a[i*][j*]  - разрешающая строка
-  новое a[i][j*] = -a[i][j*] / a[i*][j*] - разрешающий столбец
-  новое a[i][j] = a[i][j] - a[i*][j]*a[i][j*]/a[i*][j*] - все остальные
+  новое a[i*][j]  = a[i*][j] / a[i*][j*]       - разрешающая строка
+  новое a[i][j*]  = -a[i][j*] / a[i*][j*]      - разрешающий столбец
+  новое a[i][j]   = a[i][j] - a[i*][j]*a[i][j*]/a[i*][j*]   - все остальные
 То же самое применяется и к столбцу b, и к строке p_j - они пересчитываются
 по тем же формулам, просто их удобно хранить отдельно от основной таблицы.
 """
@@ -65,10 +65,30 @@ def _pivot_with_b(table, b_col, p_row, p_b_val, row, col):
     return new_table, new_b, new_p, new_p_b
 
 
-def _choose_pivot_col(p_row):
-    # поиск минимального отрицательного p_j, если таких нет - решение найдено
-    min_val = 0.0
+MAX_ITERATIONS = 1000
+
+
+def _choose_pivot_col(p_row, free_cols=None, bland=False):
+    """
+    Выбор разрешающего столбца.
+
+    Обычный режим (по методичке): берём минимальный отрицательный p_j.
+    Режим Бленда (bland=True): среди всех отрицательных p_j берём тот,
+    у которого наименьший номер переменной. Это защита от зацикливания
+    на вырожденных вершинах - включается только когда предыдущий шаг
+    был вырожденным (b разрешающей строки был равен 0).
+    Если отрицательных p_j нет - решение оптимально, возвращаем -1.
+    """
     col = -1
+    if bland and free_cols is not None:
+        best_var = None
+        for j, val in enumerate(p_row):
+            if val < -1e-9 and (best_var is None or free_cols[j] < best_var):
+                best_var = free_cols[j]
+                col = j
+        return col
+
+    min_val = 0.0
     for j, val in enumerate(p_row):
         if val < min_val - 1e-9:
             min_val = val
@@ -76,9 +96,15 @@ def _choose_pivot_col(p_row):
     return col
 
 
-def _choose_pivot_row(table, b_col, col):
-    # среди строк с положительным коэффициентом в разрешающем столбце
-    # берётся та, где b_i / a_ij минимальна
+def _choose_pivot_row(table, b_col, col, basis=None):
+    """
+    Выбор разрешающей строки: среди строк с положительным коэффициентом
+    в разрешающем столбце берём ту, где b_i / a_ij минимально.
+    При равных отношениях берём строку с наименьшим номером базисной
+    переменной (вторая половина правила Бленда) - это ничего не меняет
+    в невырожденных задачах, но нужно для гарантии остановки.
+    Если положительных коэффициентов нет - задача неограничена, возвращаем -1.
+    """
     min_ratio = float("inf")
     row = -1
     for i, a_row in enumerate(table):
@@ -86,6 +112,8 @@ def _choose_pivot_row(table, b_col, col):
             ratio = b_col[i] / a_row[col]
             if ratio < min_ratio - 1e-9:
                 min_ratio = ratio
+                row = i
+            elif abs(ratio - min_ratio) <= 1e-9 and basis is not None and basis[i] < basis[row]:
                 row = i
     return row
 
@@ -118,6 +146,47 @@ def _build_main_p_row(c_ext, basis, table, b_col, free_cols):
     return p_row, p_b_val
 
 
+def _remove_degenerate_art(table, b_col, basis, free_cols, art_set, var_names, output):
+    """
+    После вспомогательной задачи некоторые искусственные переменные могут
+    остаться в базисе со значением 0 - это вырожденный случай.
+
+    Для каждой такой строки пробуем выполнить пивот на ненулевой элемент
+    из столбцов настоящих переменных, чтобы вытолкнуть искусственную.
+    Если подходящего элемента нет, строка линейно зависима от остальных -
+    просто удаляем её.
+    """
+    rows_to_delete = []
+    for i, bi in enumerate(basis):
+        if bi not in art_set:
+            continue
+        if abs(b_col[i]) > 1e-9:
+            continue
+        pivot_col = -1
+        for jj, j in enumerate(free_cols):
+            if j not in art_set and abs(table[i][jj]) > 1e-9:
+                pivot_col = jj
+                break
+        if pivot_col != -1:
+            entering = free_cols[pivot_col]
+            leaving = basis[i]
+            if output:
+                print(f"Выталкиваем {var_names[leaving]} из базиса строки {i+1}, вводим {var_names[entering]}")
+            free_cols[pivot_col] = leaving
+            basis[i] = entering
+            p_dummy = [0.0] * len(free_cols)
+            table, b_col, p_dummy, _ = _pivot_with_b(table, b_col, p_dummy, 0.0, i, pivot_col)
+        else:
+            rows_to_delete.append(i)
+            if output:
+                print(f"Строка {i+1} линейно зависима, удаляем её из задачи")
+    for i in sorted(rows_to_delete, reverse=True):
+        table.pop(i)
+        b_col.pop(i)
+        basis.pop(i)
+    return table, b_col, basis
+
+
 def _solve_auxiliary(canon: CanonicalProblem, output=True):
     """
     Строим и решаем вспомогательную задачу, чтобы найти начальный базис
@@ -148,7 +217,7 @@ def _solve_auxiliary(canon: CanonicalProblem, output=True):
     free_cols = [j for j in range(n_aug) if j not in basis]
     table = [[A_aug[i][j] for j in free_cols] for i in range(m)]
 
-    # строка p_j для вспомогательной задачи считается по формуле:
+    # строка p_j для вспомогательной задачи считается по формуле из методички:
     # p_j = -сумма a_ij по строкам с искусственными переменными,
     # а в столбце b стоит -сумма b_i по тем же строкам
     p_row = [0.0] * len(free_cols)
@@ -167,14 +236,21 @@ def _solve_auxiliary(canon: CanonicalProblem, output=True):
                     [var_names[j] for j in basis], iteration=0)
 
     iteration = 1
+    bland = False
     while True:
-        col_local = _choose_pivot_col(p_row)
+        if iteration > MAX_ITERATIONS:
+            raise RuntimeError("Превышено число итераций во вспомогательной задаче.")
+        col_local = _choose_pivot_col(p_row, free_cols, bland)
         if col_local == -1:
             break
 
-        row = _choose_pivot_row(table, b_col, col_local)
+        row = _choose_pivot_row(table, b_col, col_local, basis)
         if row == -1:
             raise RuntimeError("Вспомогательная задача неограничена, проверьте исходные данные.")
+
+        # если разрешающая строка имеет b = 0, шаг вырожденный: вершина не меняется,
+        # и возможен цикл - до выхода из вырожденности выбираем столбец по Бленду
+        bland = abs(b_col[row]) < 1e-9
 
         entering = free_cols[col_local]
         free_cols[col_local] = basis[row]
@@ -188,7 +264,7 @@ def _solve_auxiliary(canon: CanonicalProblem, output=True):
                         [var_names[j] for j in basis], iteration=iteration)
         iteration += 1
 
-    # в столбце b строки p_j стоит -W', значит W' = -p_b_val
+    # по методичке в столбце b строки p_j стоит -W', значит W' = -p_b_val
     W_aux = -p_b_val
     success = abs(W_aux) < 1e-9
 
@@ -200,8 +276,10 @@ def _solve_auxiliary(canon: CanonicalProblem, output=True):
             print(f"\nW' = {W_aux:.6g}, это больше нуля.")
             print("Область допустимых решений пуста, у задачи нет решений.")
 
-    # удаление столбцов искуственных переменных, тк больше не нужны
+    # искусственные переменные больше не нужны, убираем их столбцы
     art_set = set(art_idx)
+    # обрабатываем вырожденный случай: искусственная переменная осталась в базисе со значением 0
+    table, b_col, basis = _remove_degenerate_art(table, b_col, basis, free_cols, art_set, var_names, output)
     keep = [jj for jj, j in enumerate(free_cols) if j not in art_set]
     table_clean = [[row[jj] for jj in keep] for row in table]
     free_cols_clean = [free_cols[jj] for jj in keep]
@@ -211,7 +289,7 @@ def _solve_auxiliary(canon: CanonicalProblem, output=True):
 
 def _solve_main(canon: CanonicalProblem, table, b_col, basis, free_cols, var_names, output=True):
     """
-    Решение основной задачи, когда начальный базис уже известен.
+    Решает основную задачу, когда начальный базис уже известен.
     """
     p_row, p_b_val = _build_main_p_row(canon.c_ext, basis, table, b_col, free_cols)
 
@@ -222,16 +300,20 @@ def _solve_main(canon: CanonicalProblem, table, b_col, basis, free_cols, var_nam
                     [var_names[j] for j in basis], iteration=0)
 
     iteration = 1
+    bland = False
     while True:
-        col_local = _choose_pivot_col(p_row)
+        if iteration > MAX_ITERATIONS:
+            raise RuntimeError("Превышено число итераций в основной задаче.")
+        col_local = _choose_pivot_col(p_row, free_cols, bland)
         if col_local == -1:
             break
 
-        row = _choose_pivot_row(table, b_col, col_local)
+        row = _choose_pivot_row(table, b_col, col_local, basis)
         if row == -1:
-            if output:
-                print("\nЗадача неограничена, целевая функция уходит в бесконечность.")
             return {"feasible": True, "bounded": False}
+
+        # вырожденный шаг (b = 0) - включаем правило Бленда до выхода из вырожденности
+        bland = abs(b_col[row]) < 1e-9
 
         entering = free_cols[col_local]
         free_cols[col_local] = basis[row]

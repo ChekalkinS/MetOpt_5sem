@@ -2,11 +2,9 @@
 main.py - точка входа в программу.
 
 Запуск:
-  python main.py - спросит задачу у пользователя
-  python main.py --test - решит задачу из варианта 13, покажет ответ
+  python main.py          - спросит задачу у пользователя
+  python main.py --test   - решит задачу из нашего задания и покажет ответ
 """
-
-
 
 import sys
 from input import read_problem
@@ -16,7 +14,7 @@ from output import print_solution, print_separator
 
 
 def run_test():
-    # вариант 13: Z = 3x1 + x2 + 2x3 + 4x4 -> max
+    # наша задача: Z = 3x1 + x2 + 2x3 + 4x4 -> max
     # 2x1 + x2 + x3 <= 8
     # x1 + x3 + x4 = 6
     # x2 + x4 >= 4
